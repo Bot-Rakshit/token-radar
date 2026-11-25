@@ -29,8 +29,38 @@ function chunk(type, data) {
 
 const parts = chunks(png);
 const raw = inflateSync(Buffer.concat(parts.filter(([t]) => t === 'IDAT').map(([, d]) => d)));
-function encode(level, strategy) {
-  const idat = deflateSync(raw, { level, strategy });
+
+// The scanlines' filters can be chosen again: unfilter to pixels, then refilter one way for every row.
+const ihdr = parts.find(([t]) => t === 'IHDR')[1];
+const width = ihdr.readUInt32BE(0), height = ihdr.readUInt32BE(4), bpp = { 2: 3, 6: 4 }[ihdr[9]];
+if (ihdr[8] !== 8 || !bpp || ihdr[12] !== 0) throw new Error('only 8-bit RGB or RGBA, non-interlaced');
+const stride = width * bpp;
+const paeth = (a, b, c) => { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); return pa <= pb && pa <= pc ? a : pb <= pc ? b : c; };
+const pixels = Buffer.alloc(height * stride);
+for (let y = 0; y < height; y++) {
+  const f = raw[y * (stride + 1)], src = y * (stride + 1) + 1, row = y * stride, prev = row - stride;
+  for (let i = 0; i < stride; i++) {
+    const a = i >= bpp ? pixels[row + i - bpp] : 0, b = y > 0 ? pixels[prev + i] : 0, c = y > 0 && i >= bpp ? pixels[prev + i - bpp] : 0;
+    const x = raw[src + i];
+    pixels[row + i] = (f === 0 ? x : f === 1 ? x + a : f === 2 ? x + b : f === 3 ? x + ((a + b) >> 1) : x + paeth(a, b, c)) & 255;
+  }
+}
+function refilter(f) {
+  const out = Buffer.alloc(height * (stride + 1));
+  for (let y = 0; y < height; y++) {
+    const dst = y * (stride + 1), row = y * stride, prev = row - stride;
+    out[dst] = f;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= bpp ? pixels[row + i - bpp] : 0, b = y > 0 ? pixels[prev + i] : 0, c = y > 0 && i >= bpp ? pixels[prev + i - bpp] : 0;
+      const pred = f === 0 ? 0 : f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : paeth(a, b, c);
+      out[dst + 1 + i] = (pixels[row + i] - pred) & 255;
+    }
+  }
+  return out;
+}
+const streams = [raw, ...[0, 1, 2, 3, 4].map(refilter)];
+function encode(level, strategy, stream) {
+  const idat = deflateSync(stream, { level, strategy });
   const body = [];
   let wrote = false;
   for (const [t, d] of parts) {
@@ -40,9 +70,18 @@ function encode(level, strategy) {
 }
 if (png.length >= min && png.length <= max) { console.log(`${file}: ${png.length} bytes, already in range`); process.exit(0); }
 const tries = [];
-for (let level = 9; level >= 1; level--) for (const strategy of [0, 1, 3]) tries.push(encode(level, strategy));
+for (const stream of streams) for (let level = 9; level >= 1; level -= 2) for (const strategy of [0, 1]) tries.push(encode(level, strategy, stream));
 const fit = tries.filter((b) => b.length >= min && b.length <= max).sort((a, b) => a.length - b.length)[0];
 if (!fit) { console.error(`${file}: no level lands in ${min}..${max} (sizes ${[...new Set(tries.map((b) => b.length))].sort((a, b) => a - b).join(', ')})`); process.exit(1); }
-if (!inflateSync(Buffer.concat(chunks(fit).filter(([t]) => t === 'IDAT').map(([, d]) => d))).equals(raw)) throw new Error('pixels changed');
+// Never trust the encoder: decode the chosen file back and compare every pixel.
+const back = inflateSync(Buffer.concat(chunks(fit).filter(([t]) => t === 'IDAT').map(([, d]) => d)));
+for (let y = 0; y < height; y++) {
+  const f = back[y * (stride + 1)], row = y * stride;
+  for (let i = 0; i < stride; i++) {
+    const a = i >= bpp ? pixels[row + i - bpp] : 0, b = y > 0 ? pixels[row - stride + i] : 0, c = y > 0 && i >= bpp ? pixels[row - stride + i - bpp] : 0;
+    const pred = f === 0 ? 0 : f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : paeth(a, b, c);
+    if (((back[y * (stride + 1) + 1 + i] + pred) & 255) !== pixels[row + i]) throw new Error('pixels changed');
+  }
+}
 writeFileSync(file, fit);
 console.log(`${file}: ${png.length} -> ${fit.length} bytes, same pixels`);

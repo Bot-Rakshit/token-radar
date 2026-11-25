@@ -8,7 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 SNAP="${1:-../kit/tr/token-radar-01-kit/input/snapshot.json}"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input "$SNAP" >/dev/null
+# First pass writes data.js and dashboard/ (it may stop at the screenshot check before shots exist).
+mkdir -p out && { MAKEFUN_OUTPUT_DIR=out node main.ts --input "$SNAP" >/dev/null 2>&1 || test -f out/dashboard/index.html; }
 TOP=$(node -e 'const b=require("./out/board.json");console.log(b.rows[0].slug)')
 shoot() {
   "$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 --window-size=1440,900 \
