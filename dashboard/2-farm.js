@@ -81,7 +81,7 @@
   }
 
   const minutes = (m) => (m >= 60 ? `${+(m / 60).toFixed(1)} h` : `${m} min`);
-  const money = (n) => (n < 0.01 ? 'under $0.01' : n < 10 ? '$' + n.toFixed(2) : usd(n));
+  const money = (n) => (n === 0 ? '$0' : n < 0.01 ? 'under $0.01' : n < 10 ? '$' + n.toFixed(2) : usd(n));
 
   /** A protocol's farm plan: steps with cost and time, and the plan's totals. */
   function farmPlan(r) {

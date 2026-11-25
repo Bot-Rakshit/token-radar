@@ -101,18 +101,19 @@
   }
 
   function renderBoard(rows) {
-    const maxV = radar.rows[0].high;
-    const scale = (v) => (Math.log10(v) - 5.5) / (Math.log10(maxV) - 5.5) * 100;
+    // One log axis for every row's low-high band, from the board's lowest low to its highest high.
+    const lo = Math.log10(Math.min(...radar.rows.map((r) => r.low))), hi = Math.log10(Math.max(...radar.rows.map((r) => r.high)));
+    const scale = (v) => (Math.log10(v) - lo) / (hi - lo) * 100;
     const th = (key, label, cls = '') => {
       const on = state.sort === key, arrow = on ? (state.dir === 'asc' ? '▲' : '▼') : '';
       return `<th class="${cls} ${on ? 'sorted' : ''}" data-sort="${key}" aria-sort="${on ? (state.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">${label}<span class="ar">${arrow}</span></th>`;
     };
     const body = rows.map((r) => {
-      const lo = scale(r.low), hi = scale(r.high), mid = scale(r.implied), p = r.plan;
+      const x0 = scale(r.low), x1 = scale(r.high), mid = scale(r.implied), p = r.plan;
       return `<tr data-slug="${esc(r.slug)}" class="${state.p === r.slug ? 'sel' : ''}"><td class="num rank">${r.rank}</td>
         <td><div class="nm">${esc(r.name)} ${tierTag(r.tier)}${r.caution ? '<span class="tag warn" title="' + esc(r.caution) + '">!</span>' : ''}</div><div class="sub">${esc(r.category)} · ${esc(r.chains[0] || '')}${r.chains.length > 1 ? ` +${r.chains.length - 1}` : ''}</div></td>
         <td class="num">${usd(r.tvl)}</td><td class="num">${pct(r.change7d)}</td><td class="num">${ageText(r.days)}</td><td class="num">${times(r.effective)}</td>
-        <td class="val"><div class="range"><i style="left:${lo.toFixed(1)}%;width:${(hi - lo).toFixed(1)}%"></i><b style="left:${mid.toFixed(1)}%"></b></div><span class="num big">${usd(r.implied)}</span></td>
+        <td class="val"><div class="range"><i style="left:${x0.toFixed(1)}%;width:${(x1 - x0).toFixed(1)}%"></i><b style="left:${mid.toFixed(1)}%"></b></div><span class="num big">${usd(r.implied)}</span></td>
         <td class="farm"><b>${usd(p.cap)}</b> on ${esc(p.venue)} · ${usd(p.fees)} fees · ${p.hold}d<div class="sub">${p.steps.length} steps · share ≈ ${usd(p.share)}</div></td></tr>`;
     }).join('');
     return `<table class="board"><thead><tr>${th('rank', '#', 'num')}${th('name', 'Protocol')}${th('tvl', 'TVL', 'num')}${th('change7d', '7d', 'num')}${th('days', 'No token', 'num')}${th('multiple', 'Value ÷ TVL', 'num')}${th('implied', 'Implied value · low–high', 'val')}${th('cap', 'Farm plan · position, fees, hold', 'farm')}</tr></thead>
