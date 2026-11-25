@@ -8,7 +8,8 @@
  *   whole peer set when a category has few peers (empirical Bayes; credibility n / (n + K)).
  * - tvlTerm: peers show mcap rising slower than TVL; the slope is fitted here (fitScaleSlope), half of it is used.
  * - growthTerm and noTokenAgeTerm: stated, bounded priors (the peers cannot fit them), each x0.84 to x1.19.
- * Every list below names categories or chains, never a protocol: no protocol name appears in this source.
+ * No protocol is named anywhere in this source: the lists below name categories, and the same functions
+ * score every row.
  */
 (function (root) {
   'use strict';
@@ -18,6 +19,7 @@
     version: 'peers-eb-1',
     winsor: [0.05, 0.95], // peer multiples are clipped at the peer set's own 5th and 95th percentiles
     credibility_k: 5, // a category with K peers gets half its own estimate, half its family's
+    min_own_peers: 2, // one traded peer is an anecdote, not a price: below this a category takes its family's
     slope_damping: 0.5, // use half the fitted size slope: part of it is small records carrying a whole token's cap
     growth_clamp: [-50, 100], // per cent; a week's change beyond these is not read further
     growth_elasticity: 0.25, // a quarter of the week's TVL change carries into value
@@ -44,7 +46,6 @@
   const SET_ASIDE_CATEGORIES = ['CEX', 'Bridge', 'Canonical Bridge', 'Cross Chain Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'Anchor BTC', 'Decentralized BTC'];
   const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
   const WRAPPER_WORD = /\b(wrapped|staked|staking|bridge|bridged)\b/i;
-  const EXCHANGE_PREFIX = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)\b/;
   const brandOf = (name) => name.toLowerCase().split(/[\s.\-_]+/)[0];
 
   // ---------- small numeric helpers ----------
@@ -91,7 +92,7 @@
         const t = tokenBrands.get(brandOf(p.name));
         if (t) caution = `a sibling record under the same brand carries ${t}: DefiLlama's record is not proof of no token`;
       } else if (status === 'trades') { group = 'trades'; reason = 'token trades: market cap recorded'; }
-      else if (status === 'recorded') { group = 'recorded'; reason = 'token recorded (id or ticker), no market cap'; }
+      else if (status === 'recorded') { group = 'recorded'; reason = 'token recorded (id or ticker), market cap zero or missing'; }
       else { reason = setAsideReason(p, snapshot.floor_usd, tokenBrands); group = reason ? 'aside' : 'early'; }
       ledger.push({ p, group, reason, caution });
     }
@@ -103,24 +104,28 @@
     if (SET_ASIDE_CATEGORIES.includes(p.category)) return `${p.category}: custodial or wrapped product of an existing asset`;
     if (VERSIONED.test(p.name)) return 'versioned pool of another protocol';
     if (WRAPPER_WORD.test(p.name)) return 'wrapped, staked or bridged product by its name';
-    if (EXCHANGE_PREFIX.test(p.name)) return 'an exchange product by its name';
     if (tokenBrands.has(brandOf(p.name))) return `same brand as a record carrying ${tokenBrands.get(brandOf(p.name))}`;
-    // At or above the floor, a protocol passing every test above is off the house watchlist for one reason:
-    // DefiLlama records a parent protocol for it. The snapshot omits that field; the watchlist reveals it.
-    if (p.tvl_usd >= floor) return 'product line of a parent protocol (deduced: above the floor, passes every other test, off the watchlist)';
+    // The house watchlist takes every protocol at or above the floor that passes the tests above unless
+    // DefiLlama records a parent protocol for it, so one that passes them all and is still off the list has
+    // a parent on record. The snapshot omits the field; the published rule and its output pin it down.
+    if (p.tvl_usd >= floor) return 'above the floor yet off the house watchlist: DefiLlama records a parent protocol';
     return null;
   }
 
   // ---------- 2. calibration on the peers: what traded tokens are worth per dollar of TVL ----------
 
-  /** Live-token protocols whose market cap belongs to their own TVL: the model's peers. */
+  /**
+   * Live-token protocols whose market cap belongs to their own TVL: the model's peers. Left out: exchanges,
+   * versioned pools and wrapped or staked names (the cap is a parent's), tickers or ids shared by several
+   * records (one cap, many TVLs), and receipts whose cap equals their TVL within 2% (the cap is the deposits).
+   */
   function selectLivePeers(snapshot) {
     const shared = new Map();
     const count = (k) => k && shared.set(k.toLowerCase(), (shared.get(k.toLowerCase()) || 0) + 1);
     for (const p of snapshot.protocols) { count(p.symbol); count(p.gecko_id && 'id:' + p.gecko_id); }
     const isShared = (p) => (p.symbol && shared.get(p.symbol.toLowerCase()) > 1) || (p.gecko_id && shared.get('id:' + p.gecko_id.toLowerCase()) > 1);
     return snapshot.protocols
-      .filter((p) => p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX' && !VERSIONED.test(p.name) && !/\b(wrapped|staked|staking)\b/i.test(p.name) && !isShared(p))
+      .filter((p) => p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX' && !VERSIONED.test(p.name) && !/\b(wrapped|staked|staking)\b/i.test(p.name) && !/^st[A-Z]{2,}/.test(p.name) && !isShared(p) && Math.abs(p.mcap_usd / p.tvl_usd - 1) > 0.02)
       .map((p) => ({ slug: p.slug, name: p.name, category: p.category, family: familyOf(p.category), tvl: p.tvl_usd, mcap: p.mcap_usd, raw: p.mcap_usd / p.tvl_usd }));
   }
 
@@ -163,14 +168,15 @@
 
   /** A category's multiple at the floor's TVL, with how it was made: own peers, weight, family. */
   function peerMultiple(cal, category) {
-    const family = familyOf(category), own = cal.cat[category] || [], famMu = cal.famMu[family];
+    const family = familyOf(category), famMu = cal.famMu[family], all = cal.cat[category] || [];
+    const own = all.length >= CONFIG.min_own_peers ? all : [];
     const weight = own.length / (own.length + cal.K);
     const mu = shrink(own, famMu, cal.K);
     // The band's pool: the category's own peers when it has 5, else the family's, else all peers.
     const pool = own.length >= 5 ? own : (cal.fam[family] || []).length >= 5 ? cal.fam[family] : cal.pts;
     const zs = sortedNums(pool.map((q) => q.z)), mid = quantile(zs, 0.5);
     return {
-      family, peers: own, weight, multiple: Math.exp(mu), familyMultiple: Math.exp(famMu), ownMultiple: own.length ? Math.exp(mean(own.map((q) => q.z))) : null,
+      family, peers: own, set: all, weight, multiple: Math.exp(mu), familyMultiple: Math.exp(famMu), ownMultiple: own.length ? Math.exp(mean(own.map((q) => q.z))) : null,
       lowFactor: Math.exp(quantile(zs, CONFIG.band[0]) - mid), highFactor: Math.exp(quantile(zs, CONFIG.band[1]) - mid),
       bandPool: pool === own ? 'category' : pool === cal.pts ? 'all peers' : 'family', bandN: pool.length,
     };
@@ -201,7 +207,7 @@
   function impliedValue(cal, p, asOf) {
     const pm = peerMultiple(cal, p.category);
     const days = daysBetween(p.listed_at, asOf);
-    const size = tvlTerm(cal, p.tvl_usd), growth = growthTerm(p.change_7d), age = noTokenAgeTerm(days);
+    const size = tvlTerm(cal, Math.max(1, p.tvl_usd)), growth = growthTerm(p.change_7d), age = noTokenAgeTerm(days);
     const effective = pm.multiple * size * growth * age;
     const implied = Math.max(1, Math.round(p.tvl_usd * effective));
     return {

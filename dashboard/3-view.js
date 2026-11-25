@@ -13,9 +13,11 @@
 
   // ---------- formatting ----------
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const pct = (x) => (x === null ? '<span class="dim">n/a</span>' : `<span class="${x >= 0 ? 'up' : 'down'}">${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}%</span>`);
+  const pct = (x) => (x === null ? '<span class="dim">n/a</span>' : Math.abs(x) < 0.05 ? '0.0%' : `<span class="${x > 0 ? 'up' : 'down'}">${x > 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}%</span>`);
+  const CFG = M.CONFIG, [AGE_LO, AGE_HI] = CFG.age_range, [G_LO, G_HI] = CFG.growth_clamp;
   const times = (x, d = 3) => '×' + x.toFixed(d);
   const ageText = (d) => (d === null ? 'not dated' : d < 365 ? `${d}d` : `${(d / 365).toFixed(1)}y`);
+  const minutes = (m) => (m >= 60 ? `${+(m / 60).toFixed(1)} h` : `${m} min`);
   const tierTag = (t) => `<span class="tag ${t}">${t === 'watchlist' ? 'WL' : 'EARLY'}</span>`;
 
   // ---------- state in the hash ----------
@@ -38,7 +40,7 @@
   // ---------- the board: filter, then sort ----------
   const SORTS = {
     rank: (r) => -r.rank, name: (r) => r.name.toLowerCase(), tvl: (r) => r.tvl, change7d: (r) => (r.change7d === null ? -1e9 : r.change7d),
-    days: (r) => (r.days === null ? -1 : r.days), multiple: (r) => r.effective, implied: (r) => r.implied, cap: (r) => r.plan.share / r.plan.cap,
+    days: (r) => (r.days === null ? -1 : r.days), multiple: (r) => r.effective, implied: (r) => r.implied, cost: (r) => -r.plan.cost,
   };
   function visibleRows() {
     const q = state.q.trim().toLowerCase();
@@ -76,11 +78,11 @@
       <p class="eq">implied = TVL × <em>peer multiple</em> × <em>size</em> × <em>growth</em> × <em>no-token age</em></p>
       <ul><li><em>peer multiple</em>: market cap ÷ TVL of ${S.peers} traded peers, by category, shrunk to its family (weight n/(n+${cal.K}))</li>
       <li><em>size</em> (TVL ÷ ${usd(cal.floor)})<sup>−${cal.gamma.toFixed(3)}</sup>: half the slope fitted on the peers (${cal.slope.toFixed(2)})</li>
-      <li><em>growth</em> (1 + 7d)<sup>${M.CONFIG.growth_elasticity}</sup>, 7d clamped −50…+100% · <em>no-token age</em> ×0.85 new → ×1.15 at 3y</li></ul></div>
+      <li><em>growth</em> (1 + 7d)<sup>${CFG.growth_elasticity}</sup>, 7d clamped ${G_LO}…+${G_HI}% · <em>no-token age</em> ×${AGE_LO} new → ×${AGE_HI} at ${CFG.age_full_days / 365}y</li></ul></div>
       <div class="fams"><h3>Peer multiple at ${usd(cal.floor)} TVL, by family</h3><svg viewBox="0 0 320 92" class="bars">${bars}</svg></div>
-      <div class="test"><h3>Out-of-sample test</h3><p>Each of ${b.n} traded peers left out, model refit, its market cap predicted. Median miss:</p>
-      <table class="mini"><tr><td>this model</td><td class="num"><b>${times(b.model.median, 1)}</b></td><td class="num">${Math.round(b.model.within3 * 100)}% within 3×</td></tr>
-      <tr><td>category median</td><td class="num">${times(b.category.median, 1)}</td><td class="num">${Math.round(b.category.within3 * 100)}%</td></tr>
+      <div class="test"><h3>Out-of-sample test</h3><p>Leave-one-out on ${b.n} traded peers: each market cap predicted by the model refit without it.</p>
+      <table class="mini"><tr><th>predictor</th><th class="num">median miss</th><th class="num">within 3×</th></tr><tr><td>this model</td><td class="num"><b>${times(b.model.median, 1)}</b></td><td class="num">${Math.round(b.model.within3 * 100)}%</td></tr>
+      <tr><td>raw category median</td><td class="num">${times(b.category.median, 1)}</td><td class="num">${Math.round(b.category.within3 * 100)}%</td></tr>
       <tr><td>flat ${M.CONFIG.flat_multiple}× TVL</td><td class="num">${times(b.flat.median, 1)}</td><td class="num">${Math.round(b.flat.within3 * 100)}%</td></tr></table></div></section>`;
   }
 
@@ -103,7 +105,7 @@
   function renderBoard(rows) {
     // One log axis for every row's low-high band, from the board's lowest low to its highest high.
     const lo = Math.log10(Math.min(...radar.rows.map((r) => r.low))), hi = Math.log10(Math.max(...radar.rows.map((r) => r.high)));
-    const scale = (v) => (Math.log10(v) - lo) / (hi - lo) * 100;
+    const scale = (v) => Math.min(100, Math.max(0, (Math.log10(v) - lo) / (hi - lo) * 100));
     const th = (key, label, cls = '') => {
       const on = state.sort === key, arrow = on ? (state.dir === 'asc' ? '▲' : '▼') : '';
       return `<th class="${cls} ${on ? 'sorted' : ''}" data-sort="${key}" aria-sort="${on ? (state.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">${label}<span class="ar">${arrow}</span></th>`;
@@ -114,9 +116,9 @@
         <td><div class="nm">${esc(r.name)} ${tierTag(r.tier)}${r.caution ? '<span class="tag warn" title="' + esc(r.caution) + '">!</span>' : ''}</div><div class="sub">${esc(r.category)} · ${esc(r.chains[0] || '')}${r.chains.length > 1 ? ` +${r.chains.length - 1}` : ''}</div></td>
         <td class="num">${usd(r.tvl)}</td><td class="num">${pct(r.change7d)}</td><td class="num">${ageText(r.days)}</td><td class="num">${times(r.effective)}</td>
         <td class="val"><div class="range"><i style="left:${x0.toFixed(1)}%;width:${(x1 - x0).toFixed(1)}%"></i><b style="left:${mid.toFixed(1)}%"></b></div><span class="num big">${usd(r.implied)}</span></td>
-        <td class="farm"><b>${usd(p.cap)}</b> on ${esc(p.venue)} · ${usd(p.fees)} fees · ${p.hold}d<div class="sub">${p.steps.length} steps · share ≈ ${usd(p.share)}</div></td></tr>`;
+        <td class="farm"><b>${usd(p.cap)}</b> on ${esc(p.venue)} · ${usd(p.cost)} cost · ${p.hold}d<div class="sub">${p.steps.length} steps · ${p.setup} min setup · 10 min/wk</div></td></tr>`;
     }).join('');
-    return `<table class="board"><thead><tr>${th('rank', '#', 'num')}${th('name', 'Protocol')}${th('tvl', 'TVL', 'num')}${th('change7d', '7d', 'num')}${th('days', 'No token', 'num')}${th('multiple', 'Value ÷ TVL', 'num')}${th('implied', 'Implied value · low–high', 'val')}${th('cap', 'Farm plan · position, fees, hold', 'farm')}</tr></thead>
+    return `<table class="board"><thead><tr>${th('rank', '#', 'num')}${th('name', 'Protocol')}${th('tvl', 'TVL', 'num')}${th('change7d', '7d', 'num')}${th('days', 'No token', 'num')}${th('multiple', 'Value ÷ TVL', 'num')}${th('implied', 'Implied value · low–high', 'val')}${th('cost', 'Farm plan · position, cost, hold', 'farm')}</tr></thead>
       <tbody>${body || '<tr><td colspan="8" class="empty">No row matches these filters.</td></tr>'}</tbody></table>`;
   }
 
@@ -124,12 +126,12 @@
   function renderCategoryPanel(rows) {
     if (!state.cat) return '';
     const pm = M.peerMultiple(cal, state.cat), wl = rows.filter((r) => r.tier === 'watchlist').length;
-    const peerRows = pm.peers.slice().sort((a, b) => b.tvl - a.tvl).map((q) => `<tr><td>${esc(q.name)}</td><td class="num">${usd(q.tvl)}</td><td class="num">${usd(q.mcap)}</td><td class="num">${times(q.raw, 2)}</td><td class="num">${times(Math.exp(q.z), 2)}</td></tr>`).join('');
+    const peerRows = pm.set.slice().sort((a, b) => b.tvl - a.tvl).map((q) => `<tr><td>${esc(q.name)}</td><td class="num">${usd(q.tvl)}</td><td class="num">${usd(q.mcap)}</td><td class="num">${times(q.raw, 2)}</td><td class="num">${times(Math.exp(q.z), 2)}</td></tr>`).join('');
     return `<aside class="catpanel"><h3>${esc(state.cat)} at a glance</h3>
       <dl><dt>Ranked here</dt><dd>${rows.length} (${wl} watchlist · ${rows.length - wl} early)</dd><dt>TVL</dt><dd>${usd(rows.reduce((s, r) => s + r.tvl, 0))}</dd>
       <dt>Implied value</dt><dd>${usd(rows.reduce((s, r) => s + r.implied, 0))}</dd><dt>Peer multiple</dt><dd>${times(pm.multiple)} at ${usd(cal.floor)}</dd>
       <dt>Credibility</dt><dd>${Math.round(pm.weight * 100)}% own peers · ${100 - Math.round(pm.weight * 100)}% ${esc(pm.family)}</dd></dl>
-      <h4>${pm.peers.length} traded ${esc(state.cat)} tokens, kept off the board</h4>${pm.peers.length ? `<table class="mini peers"><tr><th>Peer</th><th class="num">TVL</th><th class="num">Mcap</th><th class="num">÷TVL</th><th class="num">at ${usd(cal.floor)}</th></tr>${peerRows}</table>` : `<p class="dim">None trade, so the ${esc(pm.family)} family's ${times(pm.familyMultiple)} prices it.</p>`}</aside>`;
+      <h4>${pm.set.length} traded ${esc(state.cat)} tokens, kept off the board</h4>${pm.set.length ? `<table class="mini peers"><tr><th>Peer</th><th class="num">TVL</th><th class="num">Mcap</th><th class="num">÷TVL</th><th class="num">at ${usd(cal.floor)}</th></tr>${peerRows}</table>` : `<p class="dim">Too few trade (minimum ${CFG.min_own_peers}), so the ${esc(pm.family)} family's ${times(pm.familyMultiple)} prices it.</p>`}</aside>`;
   }
 
   // ---------- the other ledger views ----------
@@ -140,7 +142,7 @@
         <table class="board list"><thead><tr><th>Peer</th><th>Category · family</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Mcap ÷ TVL</th><th class="num">At ${usd(cal.floor)}</th></tr></thead><tbody>${rows.map((q) => `<tr><td>${esc(q.name)}</td><td>${esc(q.category)} · ${esc(q.family)}</td><td class="num">${usd(q.tvl)}</td><td class="num">${usd(q.mcap)}</td><td class="num">${times(q.raw, 3)}</td><td class="num">${times(Math.exp(q.z), 3)}</td></tr>`).join('')}</tbody></table>`;
     }
     const entries = radar.ledger.filter((e) => e.group === state.view).sort((a, b) => b.p.tvl_usd - a.p.tvl_usd);
-    const lede = { trades: 'Their token already trades: the market prices them, so the radar does not. The ones whose cap belongs to their own TVL are the peers.', recorded: 'DefiLlama records a ticker or CoinGecko id but no market cap: a token exists, so they are not pre-token.', aside: 'No token recorded, but not a launch of their own: custodial, wrapped or versioned products, or product lines of a parent.' }[state.view];
+    const lede = { trades: 'Their token trades, so the market prices them, not the radar. Those whose cap is their own TVL\'s are the peers.', recorded: 'DefiLlama records a ticker or id but no market cap: a token exists, so they are not pre-token.', aside: 'No token recorded, but no launch of their own: custodial, wrapped, versioned or a parent\'s product line.' }[state.view];
     return `<p class="lede">${lede}</p><table class="board list"><thead><tr><th>Protocol</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th>Why it is not ranked</th></tr></thead><tbody>${entries.map((e) => `<tr><td>${esc(e.p.name)}${e.p.symbol ? ` <span class="dim">${esc(e.p.symbol)}</span>` : ''}</td><td>${esc(e.p.category)}</td><td class="num">${usd(e.p.tvl_usd)}</td><td class="num">${e.p.mcap_usd ? usd(e.p.mcap_usd) : '<span class="dim">—</span>'}</td><td class="why">${esc(e.reason)}</td></tr>`).join('')}</tbody></table>`;
   }
 
@@ -151,39 +153,52 @@
     const x = (m) => 10 + (Math.log(m) - lo) / (hi - lo) * (W - 20);
     const fam = cal.fam[r.pm.family] || [];
     const dots = fam.map((q, i) => `<circle cx="${x(Math.exp(q.z)).toFixed(1)}" cy="${q.category === r.category ? 30 : 46 + (i % 3) * 5}" r="${q.category === r.category ? 4.5 : 3}" class="${q.category === r.category ? 'own' : ''}"><title>${esc(q.name)} ${times(Math.exp(q.z), 2)}</title></circle>`).join('');
-    const mark = (m, cls, label, y) => `<line x1="${x(m).toFixed(1)}" x2="${x(m).toFixed(1)}" y1="14" y2="66" class="${cls}"/><text x="${x(m).toFixed(1)}" y="${y}" class="${cls}" text-anchor="middle">${label}</text>`;
+    const mark = (m, cls, label, end) => `<line x1="${x(m).toFixed(1)}" x2="${x(m).toFixed(1)}" y1="14" y2="66" class="${cls}"/><text x="${(x(m) + (end ? -4 : 4)).toFixed(1)}" y="11" class="${cls}" text-anchor="${end ? 'end' : 'start'}">${label}</text>`;
     const labels = fam.filter((q) => q.category === r.category).slice(0, 3).map((q) => `<text x="${x(Math.exp(q.z)).toFixed(1)}" y="24" text-anchor="middle" class="own">${esc(q.name)}</text>`).join('');
     const ticks = [0.01, 0.1, 1].map((t) => `<text x="${x(t).toFixed(1)}" y="80" text-anchor="middle" class="dim">${t}×</text>`).join('');
-    return `<svg viewBox="0 0 ${W} 84" class="plot">${ticks}${dots}${labels}${mark(r.pm.familyMultiple, 'famline', `${esc(r.pm.family)} ${times(r.pm.familyMultiple, 2)}`, 10)}${mark(r.pm.multiple, 'useline', `used ${times(r.pm.multiple, 3)}`, 76)}</svg>`;
+    return `<svg viewBox="0 0 ${W} 84" class="plot">${ticks}${dots}${labels}${mark(r.pm.familyMultiple, 'famline', `${esc(r.pm.family)} ${times(r.pm.familyMultiple, 2)}`, true)}${mark(r.pm.multiple, 'useline', `used ${times(r.pm.multiple, 3)}`, false)}</svg>`;
   }
 
   /** The traded peers closest in size from the row's family: the market's own prices for a protocol like this one. */
   function renderNearestPeers(r) {
-    const near = (cal.fam[r.pm.family] || []).slice().sort((a, b) => Math.abs(Math.log(a.tvl / r.tvl)) - Math.abs(Math.log(b.tvl / r.tvl))).slice(0, 5);
-    return `<h4>Closest ${esc(r.pm.family)} tokens by TVL, as the market prices them</h4><table class="mini"><tr><th>Peer</th><th>Category</th><th class="num">TVL</th><th class="num">Mcap</th><th class="num">÷TVL</th></tr>${near.map((q) => `<tr><td>${esc(q.name)}</td><td>${esc(q.category)}</td><td class="num">${usd(q.tvl)}</td><td class="num">${usd(q.mcap)}</td><td class="num">${times(q.raw, 3)}</td></tr>`).join('')}</table>`;
+    const dist = (q) => (q.category === r.category ? 0 : 100) + Math.abs(Math.log(q.tvl / r.tvl));
+    const near = (cal.fam[r.pm.family] || []).slice().sort((a, b) => dist(a) - dist(b)).slice(0, 5);
+    return `<h4>Closest traded tokens: same category first, then nearest TVL</h4><table class="mini"><tr><th>Peer</th><th>Category</th><th class="num">TVL</th><th class="num">Mcap</th><th class="num">÷TVL</th></tr>${near.map((q) => `<tr><td>${esc(q.name)}</td><td>${esc(q.category)}</td><td class="num">${usd(q.tvl)}</td><td class="num">${usd(q.mcap)}</td><td class="num">${times(q.raw, 3)}</td></tr>`).join('')}</table>`;
+  }
+
+  /** What would move this value: each input changed alone, through the same term functions. */
+  function renderSensitivity(r) {
+    const d = r.days === null ? null : r.days + 365;
+    const items = [
+      ['TVL doubles', M.tvlTerm(cal, 2 * r.tvl) / r.size * 2],
+      ['7d growth +20 points', M.growthTerm((r.change7d || 0) + 20) / r.growth],
+      ['one more year with no token', d === null ? 1 : M.noTokenAgeTerm(d) / r.age],
+      [`${r.pm.family} peers re-price 2×`, 2],
+    ];
+    return `<h4>What would move it (one input at a time)</h4><table class="mini">${items.map(([k, f]) => `<tr><td>${esc(k)}</td><td class="num">${times(f, 2)}</td><td class="num">${usd(r.implied * f)}</td></tr>`).join('')}</table>`;
   }
 
   function renderDetail(r) {
     const pm = r.pm, p = r.plan, own = pm.peers.length;
     const line = (label, how, value) => `<tr><td>${label}</td><td class="how">${how}</td><td class="num">${value}</td></tr>`;
-    const steps = p.steps.map((s, i) => `<li><span class="n">${i + 1}</span><p>${esc(s.do)}</p><span class="cost">${esc(s.cost)}</span><span class="time">${esc(s.time)}</span></li>`).join('');
+    const steps = p.steps.map((s, i) => `<li><span class="n">${i + 1}</span><p>${esc(s.do)}</p><span class="ct"><b>${esc(s.cost)}</b>${esc(s.time)}</span></li>`).join('');
     return `<div class="scrim" data-close="1"></div><article class="detail" aria-label="${esc(r.name)}">
       <header><div><div class="dim">Rank ${r.rank} of ${radar.rows.length} · ${tierTag(r.tier)} · ${esc(r.category)} (${esc(pm.family)})</div><h2>${esc(r.name)}</h2>
       <div class="dim chains">${r.chains.length} chain${r.chains.length > 1 ? 's' : ''}: ${esc(r.chains.join(', '))}</div>${r.caution ? `<div class="caution">! ${esc(r.caution)}</div>` : ''}</div>
       <div class="headline"><span class="dim">Implied value</span><b>${usd(r.implied)}</b><span class="dim">low ${usd(r.low)} · high ${usd(r.high)}</span></div><button class="close" data-close="1" aria-label="Close">×</button></header>
       <div class="cols"><section><h3>The working</h3><table class="waterfall">
-      ${line('TVL', `${esc(r.chains[0] || '')} and ${r.chains.length - 1} more`, usd(r.tvl))}
-      ${line('× peer multiple', own ? `${own} traded ${esc(r.category)} peer${own > 1 ? 's' : ''} ${times(pm.ownMultiple, 2)} at ${Math.round(pm.weight * 100)}%, ${esc(pm.family)} ${times(pm.familyMultiple, 2)} at ${100 - Math.round(pm.weight * 100)}%` : `no traded ${esc(r.category)} peer: ${esc(pm.family)} family, ${(cal.fam[pm.family] || []).length} peers`, times(pm.multiple))}
+      ${line('TVL', r.chains.length > 1 ? `${esc(r.chains[0])} and ${r.chains.length - 1} more` : esc(r.chains[0] || ''), usd(r.tvl))}
+      ${line('× peer multiple', own ? `${own} traded ${esc(r.category)} peers ${times(pm.ownMultiple, 2)} at ${Math.round(pm.weight * 100)}%, ${esc(pm.family)} ${times(pm.familyMultiple, 2)} at ${100 - Math.round(pm.weight * 100)}%` : `${pm.set.length ? `${pm.set.length} traded ${esc(r.category)} peer (${esc(pm.set[0].name)} ${times(Math.exp(pm.set[0].z), 2)}) is under the ${CFG.min_own_peers}-peer minimum` : `no traded ${esc(r.category)} peer`}: ${esc(pm.family)} family of ${(cal.fam[pm.family] || []).length}`, times(pm.multiple))}
       ${line('× size', `(${usd(r.tvl)} ÷ ${usd(cal.floor)})<sup>−${cal.gamma.toFixed(3)}</sup>`, times(r.size))}
-      ${line('× growth', r.change7d === null ? '7d change not reported' : `7d ${pct(r.change7d)}${Math.abs(r.change7d) > 50 ? ' (clamped)' : ''}, ^${M.CONFIG.growth_elasticity}`, times(r.growth))}
+      ${line('× growth', r.change7d === null ? '7d change not reported' : `7d ${pct(r.change7d)}${r.change7d < G_LO || r.change7d > G_HI ? ' (clamped)' : ''}, ^${CFG.growth_elasticity}`, times(r.growth))}
       ${line('× no-token age', r.days === null ? 'listing date not recorded: neutral' : `${r.days} days tracked with no token (${esc(r.listed)})`, times(r.age))}
-      <tr class="total"><td>= value ÷ TVL</td><td class="how">${usd(r.tvl)} × ${times(r.effective, 4)}</td><td class="num">${usd(r.implied)}</td></tr></table>
+      <tr class="total"><td>= implied value</td><td class="how">${usd(r.tvl)} × ${r.effective.toFixed(4)} (value ÷ TVL)</td><td class="num">${usd(r.implied)}</td></tr></table>
       <h4>Where the multiple comes from: ${(cal.fam[pm.family] || []).length} ${esc(pm.family)} peers at ${usd(cal.floor)} TVL ${own ? '(large dots: ' + esc(r.category) + ')' : ''}</h4>${renderPeerPlot(r)}
-      <p class="note">Low and high use the ${pm.bandPool === 'category' ? esc(r.category) : esc(pm.bandPool === 'family' ? pm.family + ' family' : 'all-peer')} quartile multiples (${pm.bandN} peers): ×${pm.lowFactor.toFixed(2)} and ×${pm.highFactor.toFixed(2)} of the value. The page computed ${usd(r.implied)}; board.json says ${usd(window.BOARD_VALUES[r.slug])}.</p>
-      ${renderNearestPeers(r)}</section>
+      <p class="note">Low and high use the ${pm.bandPool === 'category' ? esc(r.category) : esc(pm.bandPool === 'family' ? pm.family + ' family' : 'all-peer')} quartile multiples (${pm.bandN} peers): ×${pm.lowFactor.toFixed(2)} and ×${pm.highFactor.toFixed(2)} of the value. The page computed ${usd(r.implied)}; board.json says ${window.BOARD_VALUES && window.BOARD_VALUES[r.slug] ? usd(window.BOARD_VALUES[r.slug]) : 'nothing'}.</p>
+      ${renderNearestPeers(r)}${renderSensitivity(r)}</section>
       <section><h3>Farm plan <span class="dim">· ${esc(p.kind)} playbook on ${esc(p.venue)}</span></h3>
-      <div class="chips"><span><b>${usd(p.cap)}</b> position</span><span><b>${usd(p.fees)}</b> fees, all steps</span><span><b>${p.hold} days</b> hold</span><span><b>${p.weeks}×10 min</b> upkeep</span><span>share at 5% ≈ <b>${usd(p.share)}</b></span></div>
-      <ol class="steps"><li class="head"><span></span><p>Step</p><span class="cost">Cost</span><span class="time">Time</span></li>${steps}</ol></section></div></article>`;
+      <div class="chips"><span><b>${usd(p.cap)}</b> position</span><span><b>${usd(p.cost)}</b> total cost</span><span><b>${minutes(p.active)}</b> active time</span><span><b>${p.hold} days</b> hold</span><span>share if 5% goes to depositors ≈ <b>${usd(p.share)}</b></span></div>
+      <ol class="steps"><li class="head"><span></span><p>Step</p><span class="ct">Cost · time</span></li>${steps}</ol></section></div></article>`;
   }
 
   // ---------- render and events ----------
@@ -192,9 +207,11 @@
     const body = state.view === 'ranked'
       ? `${renderControls(rows)}<div class="split ${state.cat ? 'with-panel' : ''}">${renderBoard(rows)}${renderCategoryPanel(rows)}</div>`
       : renderList();
-    const sel = rowsBySlug.get(state.p);
+    const sel = rowsBySlug.get(state.p), typing = document.activeElement && document.activeElement.id === 'q';
     root.innerHTML = renderTop() + renderLedger() + renderModel() + body + (sel ? renderDetail(sel) : '');
     root.removeAttribute('aria-busy');
+    const q = document.getElementById('q');
+    if (typing && q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
   root.addEventListener('click', (e) => {
@@ -202,7 +219,7 @@
     if (!t) return;
     if (t.dataset.view) setState({ view: t.dataset.view, p: '' });
     else if (t.dataset.tier) setState({ tier: t.dataset.tier });
-    else if (t.dataset.sort) setState({ sort: t.dataset.sort, dir: state.sort === t.dataset.sort && state.dir === 'desc' ? 'asc' : 'desc' });
+    else if (t.dataset.sort) { const k = t.dataset.sort, first = k === 'name' ? 'asc' : 'desc'; setState({ sort: k, dir: state.sort === k ? (state.dir === 'asc' ? 'desc' : 'asc') : first }); }
     else if (t.dataset.slug) setState({ p: t.dataset.slug });
     else if (t.dataset.close) setState({ p: '' });
     else if (t.dataset.clear) setState({ q: '', cat: '', chain: '', tier: 'all' });
@@ -210,6 +227,5 @@
   root.addEventListener('change', (e) => { if (e.target.id === 'cat' || e.target.id === 'chain') setState({ [e.target.id]: e.target.value }); });
   root.addEventListener('input', (e) => { if (e.target.id === 'q') { clearTimeout(root.t); root.t = setTimeout(() => setState({ q: e.target.value }), 250); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.p) setState({ p: '' }); });
-  window.addEventListener('hashchange', () => { const q = document.getElementById('q'); if (q && state.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } });
   render();
 })();
