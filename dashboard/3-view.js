@@ -76,7 +76,7 @@
     }).join('');
     return `<section class="model"><div class="formula"><h3>How a row is valued</h3>
       <p class="eq">implied = TVL × <em>peer multiple</em> × <em>size</em> × <em>growth</em> × <em>no-token age</em></p>
-      <ul><li><em>peer multiple</em>: market cap ÷ TVL of ${S.peers} traded peers, by category, shrunk to its family (weight n/(n+${cal.K}))</li>
+      <ul><li><em>peer multiple</em>: market cap ÷ TVL of ${S.peers} traded peers, by category, shrunk to its family (weight n/(n+${cal.K}), at least ${CFG.min_own_peers} peers)</li>
       <li><em>size</em> (TVL ÷ ${usd(cal.floor)})<sup>−${cal.gamma.toFixed(3)}</sup>: half the slope fitted on the peers (${cal.slope.toFixed(2)})</li>
       <li><em>growth</em> (1 + 7d)<sup>${CFG.growth_elasticity}</sup>, 7d clamped ${G_LO}…+${G_HI}% · <em>no-token age</em> ×${AGE_LO} new → ×${AGE_HI} at ${CFG.age_full_days / 365}y</li></ul></div>
       <div class="fams"><h3>Peer multiple at ${usd(cal.floor)} TVL, by family</h3><svg viewBox="0 0 320 92" class="bars">${bars}</svg></div>
@@ -173,7 +173,7 @@
       ['TVL doubles', M.tvlTerm(cal, 2 * r.tvl) / r.size * 2],
       ['7d growth +20 points', M.growthTerm((r.change7d || 0) + 20) / r.growth],
       ['one more year with no token', d === null ? 1 : M.noTokenAgeTerm(d) / r.age],
-      [`${r.pm.family} peers re-price 2×`, 2],
+      ['7d growth −20 points', M.growthTerm((r.change7d || 0) - 20) / r.growth],
     ];
     return `<h4>What would move it (one input at a time)</h4><table class="mini">${items.map(([k, f]) => `<tr><td>${esc(k)}</td><td class="num">${times(f, 2)}</td><td class="num">${usd(r.implied * f)}</td></tr>`).join('')}</table>`;
   }
@@ -188,7 +188,7 @@
       <div class="headline"><span class="dim">Implied value</span><b>${usd(r.implied)}</b><span class="dim">low ${usd(r.low)} · high ${usd(r.high)}</span></div><button class="close" data-close="1" aria-label="Close">×</button></header>
       <div class="cols"><section><h3>The working</h3><table class="waterfall">
       ${line('TVL', r.chains.length > 1 ? `${esc(r.chains[0])} and ${r.chains.length - 1} more` : esc(r.chains[0] || ''), usd(r.tvl))}
-      ${line('× peer multiple', own ? `${own} traded ${esc(r.category)} peers ${times(pm.ownMultiple, 2)} at ${Math.round(pm.weight * 100)}%, ${esc(pm.family)} ${times(pm.familyMultiple, 2)} at ${100 - Math.round(pm.weight * 100)}%` : `${pm.set.length ? `${pm.set.length} traded ${esc(r.category)} peer (${esc(pm.set[0].name)} ${times(Math.exp(pm.set[0].z), 2)}) is under the ${CFG.min_own_peers}-peer minimum` : `no traded ${esc(r.category)} peer`}: ${esc(pm.family)} family of ${(cal.fam[pm.family] || []).length}`, times(pm.multiple))}
+      ${line('× peer multiple', own ? `${own} traded ${esc(r.category)} peers ${times(pm.ownMultiple, 2)} at ${Math.round(pm.weight * 100)}%, ${esc(pm.family)} ${times(pm.familyMultiple, 2)} at ${100 - Math.round(pm.weight * 100)}%` : `${pm.set.length ? `${pm.set.length} traded ${esc(r.category)} peer${pm.set.length > 1 ? 's' : ''} (${pm.set.map((q) => `${esc(q.name)} ${times(Math.exp(q.z), 2)}`).join(', ')}), under the ${CFG.min_own_peers}-peer minimum` : `no traded ${esc(r.category)} peer`}: ${esc(pm.family)} family of ${(cal.fam[pm.family] || []).length}`, times(pm.multiple))}
       ${line('× size', `(${usd(r.tvl)} ÷ ${usd(cal.floor)})<sup>−${cal.gamma.toFixed(3)}</sup>`, times(r.size))}
       ${line('× growth', r.change7d === null ? '7d change not reported' : `7d ${pct(r.change7d)}${r.change7d < G_LO || r.change7d > G_HI ? ' (clamped)' : ''}, ^${CFG.growth_elasticity}`, times(r.growth))}
       ${line('× no-token age', r.days === null ? 'listing date not recorded: neutral' : `${r.days} days tracked with no token (${esc(r.listed)})`, times(r.age))}

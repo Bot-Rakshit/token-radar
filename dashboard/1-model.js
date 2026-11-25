@@ -18,8 +18,9 @@
   const CONFIG = {
     version: 'peers-eb-1',
     winsor: [0.05, 0.95], // peer multiples are clipped at the peer set's own 5th and 95th percentiles
-    credibility_k: 5, // a category with K peers gets half its own estimate, half its family's
-    min_own_peers: 2, // one traded peer is an anecdote, not a price: below this a category takes its family's
+    credibility_k: 2, // a category with K peers gets half its own estimate, half its family's
+    min_own_peers: 3, // one or two traded peers are an anecdote, not a price: below this a category takes its family's
+    // K and the minimum were picked by runBacktest's leave-one-out error over K 2-10 and minimum 1-3; the rest are stated.
     slope_damping: 0.5, // use half the fitted size slope: part of it is small records carrying a whole token's cap
     growth_clamp: [-50, 100], // per cent; a week's change beyond these is not read further
     growth_elasticity: 0.25, // a quarter of the week's TVL change carries into value
